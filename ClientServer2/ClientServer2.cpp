@@ -1,15 +1,20 @@
 #include "stdafx.h"
 #pragma comment(lib, "ws2_32.lib")
 
-#define DEFAULT_PORT	"27000"
+#define DEFAULT_PORT	"27015"
 #define MAXCONNECTIONS	10
-#define DEFAULT_BUFLEN	512
+#define DEFAULT_BUFLEN	1024
 #define STRLEN			256
 
 DWORD WINAPI Connect(LPVOID lpParam);
+void print_data(unsigned int *data, int n);
 
 SOCKET ListenSocket;
 int iConn;
+
+struct ConnInfo {
+    SOCKET ConnectionSocket;
+};
 
 int _tmain(int argc, _TCHAR* argv[])
 {
@@ -36,8 +41,9 @@ int _tmain(int argc, _TCHAR* argv[])
     hints.ai_socktype = SOCK_STREAM;    // Stream Socket (other options include: Datagram and Raw sockets)
     hints.ai_protocol = IPPROTO_TCP;    // TCP protocol
     hints.ai_flags = AI_PASSIVE;        // allows returned address to be used in call to bind
-    // when nodename parameter in call to getaddrinfo is null, the IP
-    // address portion of the socket address structure is set to INADDR_ANY
+                                        // when nodename parameter in call to getaddrinfo is null, the IP
+                                        // address portion of the socket address structure is set to INADDR_ANY
+
 
     /* ------ getaddrinfo function (Convenience Function) --------
     * The function provides protocol-independent translation from ANSI host name to an address.
@@ -70,7 +76,7 @@ int _tmain(int argc, _TCHAR* argv[])
     * -> [in]  int     type        type of socket (i.e. SOCK_STREAM=TCP, SOCK_DGRAM=UDP)
     * -> [in]  int     protocol    protocol (i.e. IPPROTO_TCP=TCP, IPPROTO_UDP=UDP) used in conjuction with type
     * <-       SOCKET  socket      returns socket descriptor on no error, otherwise INVALID_SOCKET, where error code
-    can be obtained from WSAGetLastError()
+                                   can be obtained from WSAGetLastError()
     */
     ListenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (ListenSocket == INVALID_SOCKET) {
@@ -79,9 +85,6 @@ int _tmain(int argc, _TCHAR* argv[])
         WSACleanup();
         return 1;
     }
-
-
-    printf("Binding server to %s\n", inet_ntoa(((sockaddr_in *)result->ai_addr)->sin_addr));
 
     //Setup TCP listening socket
     iResult = bind(ListenSocket, result->ai_addr, (int)result->ai_addrlen);
@@ -96,7 +99,7 @@ int _tmain(int argc, _TCHAR* argv[])
     //done with address info so let's release it
     freeaddrinfo(result);
 
-	printf("Server running on %s", DEFAULT_PORT);
+    
     while (1) {
         if (listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR) {
             printf("Listen failed with error: %ld\n", WSAGetLastError());
@@ -104,68 +107,101 @@ int _tmain(int argc, _TCHAR* argv[])
             WSACleanup();
             return 1;
         }
-		if (iConn < MAXCONNECTIONS) {
-			hThreadConnection[iConn] = CreateThread(
-				NULL,
-				0,
-				Connect,
-				NULL,
-				0,
-				&threadConnectionID[iConn]
-			);
 
-			if (hThreadConnection[iConn] == NULL) {
-				printf("Failed to create a connection thread.");
-				return 1;
-			}
+        ConnInfo *connection = new ConnInfo;
+        connection->ConnectionSocket = INVALID_SOCKET;
+        connection->ConnectionSocket = accept(ListenSocket, NULL, NULL);
+        if (connection->ConnectionSocket == INVALID_SOCKET) {
+            printf("accept failed: %d\n", WSAGetLastError());
+            closesocket(ListenSocket);
+            WSACleanup();
+            return 1;
+        }
 
-			iConn++;
-		}
+        if (iConn < MAXCONNECTIONS) {
+            hThreadConnection[iConn] = CreateThread(
+                NULL,
+                0,
+                Connect,
+                (LPVOID)connection,
+                0,
+                &threadConnectionID[iConn]
+                );
+
+            if (hThreadConnection[iConn] == NULL) {
+                printf("Failed to create a connection thread.");
+                return 1;
+            }
+
+            iConn++;
+        }
+
+        //just for hw assignment (exit after one connection)
+        while (iConn > 0);
+        break;
     }
+
+    closesocket(ListenSocket);
+    WSACleanup();
 
     return 0;
 }
 
 DWORD WINAPI Connect(LPVOID lpParam)
 {
-	char recvbuf[DEFAULT_BUFLEN];
-	int iResult, iSendResult;
-	int recvbuflen = DEFAULT_BUFLEN;
-	SOCKET ClientSocket = INVALID_SOCKET;
+    char recvbuf[DEFAULT_BUFLEN];
+    int iResult, iSendResult;
+    int recvbuflen = DEFAULT_BUFLEN;
+    SOCKET ClientSocket = ((ConnInfo *) (lpParam))->ConnectionSocket;
 
-	ClientSocket = accept(ListenSocket, NULL, NULL);
-	if (ClientSocket == INVALID_SOCKET) {
-		printf("Accept Failed: %d\n", WSAGetLastError());
-		closesocket(ListenSocket);
-		WSACleanup();
-		return 1;
-	}
+    do {
+        iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
+        if (iResult > 0) {
+            recvbuf[iResult] = 0;
+            printf("Bytes received: %d\n", iResult);
+            printf("----------------------------------------------------\n");
+            printf("RECEIVED DATA\n");
+            printf("----------------------------------------------------\n");
+            print_data((unsigned int *)recvbuf, iResult / sizeof(int));
 
-	do {
-		iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
-		if (iResult > 0) {
-			printf("Bytes received: %d\n", iResult);
-			printf("Data received: %s\n", recvbuf);
+            //now send the data back
+            iSendResult = send(ClientSocket, recvbuf, iResult, 0);
+            if (iSendResult == SOCKET_ERROR) {
+                printf("send failed: %d\n", WSAGetLastError());
+                closesocket(ClientSocket);
+                WSACleanup();
+                return 1;
+            }
 
-			iSendResult = send(ClientSocket, recvbuf, iResult, 0);
-			if (iSendResult == SOCKET_ERROR) {
-				printf("send failed: %d\n", WSAGetLastError());
-				closesocket(ClientSocket);
-				WSACleanup();
-			}
-			printf("Bytes Sent: %d\n", iSendResult);
-		} else if (iResult == 0)
-			printf("Connection closing....\n");
-		else {
-			printf("recv failed: %d\n", WSAGetLastError());
-			closesocket(ClientSocket);
-			WSACleanup();
-			return 1;
-		}
-	} while (iResult > 0);
+        }
+        else if (iResult == 0) {
+            printf("Connection closing....\n");
+        }
+        else {
+            printf("recv failed: %d\n", WSAGetLastError());
+            closesocket(ClientSocket);
+            WSACleanup();
+            return 1;
+        }
+    } while (iResult != 0);
 
 	closesocket(ClientSocket);
 	iConn--;
 	return 0;
+}
+
+void print_data(unsigned int *data, int n)
+{
+    int col_length = 10;
+    int col_idx = 0;
+
+    for (int idx = 0; idx < n; idx++) {
+        printf("%d ", data[idx]);
+        col_idx++;
+        if (col_idx == col_length) {
+            printf("\n");
+            col_idx = 0;
+        }
+    }
 }
 

@@ -4,8 +4,12 @@
 #include "stdafx.h"
 #define DEFAULT_PORT    "27015"
 #define BUFFERLEN       256
+#define DATASIZE        100
 
-using namespace std;
+#pragma comment(lib, "ws2_32.lib")
+
+void print_data(unsigned int *data, int n);
+
 
 int _tmain(int argc, _TCHAR* argv[])
 {
@@ -13,8 +17,6 @@ int _tmain(int argc, _TCHAR* argv[])
     int iResult;
     struct addrinfo *ptr = NULL, *result = NULL, hints;
     SOCKET ConnectionSocket = INVALID_SOCKET;
-    char *sendbuf = "This is a test.\n";
-    char rcvbuf[BUFFERLEN];
 
     iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
     if (iResult != 0) {
@@ -58,23 +60,90 @@ int _tmain(int argc, _TCHAR* argv[])
         return 1;
     }
 
-    do {
-        cin.getline(sendbuf, BUFFERLEN);
+    //create random data for transmission
+    unsigned int data[DATASIZE];
+    srand(time(NULL));
+    for (int idx = 0; idx < DATASIZE; idx++) {
+        data[idx] = rand() % INT_MAX;
+    }
 
-        if (strcmp(sendbuf, 'exit') == 0)
-            break;
+    printf("----------------------------------------------------\n");
+    printf("SENT DATA\n");
+    printf("----------------------------------------------------\n");
+    print_data(data, DATASIZE);
 
-        iResult = send(ConnectionSocket, sendbuf, strlen(sendbuf), 0);
-        if (iResult == SOCKET_ERROR) {
-            printf("send failed: %d\n", WSAGetLastError());
-            closesocket(ConnectionSocket);
-            WSACleanup();
-            return 1;
-        }
-    } while (1);
+    iResult = send(ConnectionSocket, (char *) data, sizeof(unsigned int) * DATASIZE, 0);
+    if (iResult == SOCKET_ERROR) {
+        printf("send failed: %d\n", WSAGetLastError());
+        closesocket(ConnectionSocket);
+        WSACleanup();
+        return 1;
+    }
 
-    
+    //now receive the response from the server
+    unsigned int rcv_data[DATASIZE];
+    iResult = recv(ConnectionSocket, (char *)rcv_data, sizeof(int) * DATASIZE, 0);
+    if (iResult == SOCKET_ERROR) {
+        printf("Receive failed: %d\n", WSAGetLastError());
+        closesocket(ConnectionSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    printf("----------------------------------------------------\n");
+    printf("RECEIVED DATA\n");
+    printf("----------------------------------------------------\n");
+    print_data(rcv_data, DATASIZE);
+
+    //validate response
+    bool data_invalid = false;
+    for (int idx = 0; idx < DATASIZE; idx++) {
+        if (data[idx] != rcv_data[idx])
+            data_invalid = true;
+    }
+
+    printf("----------------------------------------------------\n");
+    printf("VALIDATING DATA\n");
+    printf("----------------------------------------------------\n");
+    if (data_invalid == true)
+        printf("(-) Data invalid.\n");
+    else
+        printf("(+) Data Valid.\n");
+
+
+    //send one last transmission of 0 bytes to ensure server closes connection
+    iResult = send(ConnectionSocket, (char *) rcv_data, 0, 0);
+    if (iResult == SOCKET_ERROR) {
+        printf("send failed: %d\n", WSAGetLastError());
+        closesocket(ConnectionSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    iResult = shutdown(ConnectionSocket, SD_BOTH);
+    if (iResult == SOCKET_ERROR) {
+        printf("shutdown failed with error: %d\n", WSAGetLastError());
+        closesocket(ConnectionSocket);
+        WSACleanup();
+        return 1;
+    }
+    closesocket(ConnectionSocket);
+    WSACleanup();
 
     return 0;
 }
 
+void print_data(unsigned int *data, int n)
+{
+    int col_length = 10;
+    int col_idx = 0;
+
+    for (int idx = 0; idx < n; idx++) {
+        printf("%d ", data[idx]);
+        col_idx++;
+        if (col_idx == col_length) {
+            printf("\n");
+            col_idx = 0;
+        }
+    }
+}
